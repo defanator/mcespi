@@ -70,9 +70,12 @@
  * 0.2 - 2012/02 first official build
  * 0.3 - 2014/08 compilation bugfix thanks to Shuai Xiao
  *
- /
+ */
 
+/*
 #include <crypto/internal/hash.h>
+#include <linux/err.h>
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/types.h>
@@ -80,7 +83,16 @@
 #include <linux/crypto.h>
 #include <asm/byteorder.h>
 #include <linux/debugfs.h>
-#include <linux/unaligned/packed_struct.h>
+#include <linux/unaligned/packed_struct.h> */
+
+#include <crypto/internal/hash.h>
+#include <crypto/md5.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/string.h>
+#include <linux/types.h>
+#include <linux/cryptohash.h>
+#include <asm/byteorder.h>
 
 #define NODEBUG
 
@@ -451,7 +463,7 @@ int mi_aes_expand_key(struct mi_aes_ctx *ctx, const u8 *in_key,
   u32 *key_enc, *key_dec, *key_length;
   u32 i, t, u, v, w, j;
 
-  key_enc   =PTR_ALIGN(ctx,8);
+  key_enc   =PTR_ALIGN((void *)ctx,8);
   key_dec   =key_enc+AES_MAX_KEYLENGTH_U32;
   key_length=key_dec+AES_MAX_KEYLENGTH_U32;
 
@@ -521,7 +533,7 @@ int mi_aes_set_key(struct crypto_tfm *tfm, const u8 *in_key,
   struct mi_aes_ctx *ctx = crypto_tfm_ctx(tfm);
   u32 *flags = &tfm->crt_flags;
   int ret;
-  int i;
+  //int i;
 
   ret = mi_aes_expand_key(ctx, in_key, key_len);
   if (!ret)
@@ -537,8 +549,8 @@ int mi_aes_set_key(struct crypto_tfm *tfm, const u8 *in_key,
  * we will handle it in the same function to save function calls and
  * initialization
  */
-static int mi_cbc_encrypt_segment(struct crypto_tfm *tfm,
-                         u8 *out, u8 *in, unsigned int nbytes, u8 *iv)
+void mi_cbc_encrypt_segment(struct crypto_tfm *tfm,
+                         u8 *out, const u8 *in, unsigned int nbytes, u8 *iv)
 
 {
   struct mi_aes_ctx *ctx = (struct mi_aes_ctx *)PTR_ALIGN(crypto_tfm_ctx(tfm),8);
@@ -767,7 +779,7 @@ static void mi_aes_encrypt(struct crypto_tfm *tfm, u8 *out, const u8 *in)
  * AES is nothing more than CBC(AES) with init vector of zero
  * so reuse our generic function
  */
-  mi_cbc_encrypt_segment(tfm,out,in,AES_BLOCK_SIZE,iv);
+  mi_cbc_encrypt_segment(tfm,out,in,AES_BLOCK_SIZE,(u8 *)iv);
 }
 
 /*
@@ -803,8 +815,8 @@ static void mi_aes_encrypt(struct crypto_tfm *tfm, u8 *out, const u8 *in)
  * we will handle it in the same function to save function calls and
  * initialization
  */
-static int mi_cbc_decrypt_segment(struct crypto_tfm *tfm,
-                         u8 *out, u8 *in, unsigned int nbytes, u8 *iv)
+void mi_cbc_decrypt_segment(struct crypto_tfm *tfm,
+                         u8 *out, const u8 *in, unsigned int nbytes, u8 *iv)
 
 {
   struct mi_aes_ctx *ctx = (struct mi_aes_ctx *)PTR_ALIGN(crypto_tfm_ctx(tfm),8);
@@ -1057,7 +1069,7 @@ static void mi_aes_decrypt(struct crypto_tfm *tfm, u8 *out, const u8 *in)
  * we just run the CBC(AES) decryption function with intialization
  * vector of zero
  */
-  mi_cbc_decrypt_segment(tfm,out,in,AES_BLOCK_SIZE,iv);
+  mi_cbc_decrypt_segment(tfm,out,in,AES_BLOCK_SIZE,(u8 *)iv);
 }
 
 /*
