@@ -60,7 +60,75 @@
 #include <linux/errno.h>
 #include <linux/crypto.h>
 #include <asm/byteorder.h>
+#include <linux/debugfs.h>
 #include <linux/unaligned/packed_struct.h>
+
+#define NODEBUG
+
+/*
+ * ---------------------------------------------------------------------------
+ * Debugging Code
+ * ---------------------------------------------------------------------------
+ */
+
+#ifdef DEBUG
+
+u64 mi_aes_bytes_decrypted;
+u64 mi_aes_bytes_encrypted;
+u64 mi_sha1_bytes_calculated;
+u64 mi_md5_bytes_calculated;
+u64 mi_aes_alignment_encrypt[15];
+u64 mi_aes_alignment_decrypt[15];
+
+void mi_debug(void)
+{
+  int i;
+  char c[255];
+  struct dentry *df;
+  struct dentry *dm;
+  
+  df = debugfs_create_dir("mcespi", NULL);
+  if (!df) return;
+
+  dm = debugfs_create_u64("aes_bytes_decrypted", S_IRUGO,
+                          df, &mi_aes_bytes_decrypted);
+  if (!dm) return;
+
+  dm = debugfs_create_u64("aes_bytes_encrypted", S_IRUGO,
+                          df, &mi_aes_bytes_encrypted);
+  if (!dm) return;
+
+  dm = debugfs_create_u64("sha1_bytes_calculated", S_IRUGO,
+                          df, &mi_sha1_bytes_calculated);
+  if (!dm) return;
+
+  dm = debugfs_create_u64("md5_bytes_calculated", S_IRUGO,
+                          df, &mi_md5_bytes_calculated);
+  if (!dm) return;
+
+  mi_aes_bytes_decrypted = 0;
+  mi_aes_bytes_encrypted = 0;
+  mi_sha1_bytes_calculated = 0;
+  mi_md5_bytes_calculated = 0;
+
+  for (i=0;i<16;i++) {
+    mi_aes_alignment_decrypt[i]=0;
+    sprintf(c,"aes_alignment_decrypt_%02i",i);
+
+    dm = debugfs_create_u64(c, S_IRUGO,
+                            df, &mi_aes_alignment_decrypt[i]);
+
+
+    mi_aes_alignment_encrypt[i]=0;
+    sprintf(c,"aes_alignment_encrypt_%02i",i);
+
+    dm = debugfs_create_u64(c, S_IRUGO,
+                            df, &mi_aes_alignment_encrypt[i]);
+  }
+}
+
+#endif
+
 
 /*
  * ---------------------------------------------------------------------------
@@ -78,9 +146,10 @@
 #define AES_MAX_KEYLENGTH_U32   (AES_MAX_KEYLENGTH / sizeof(u32))
 
 struct mi_aes_ctx {
-  u32 key_enc[AES_MAX_KEYLENGTH_U32];
-  u32 key_dec[AES_MAX_KEYLENGTH_U32];
-  u32 key_length;
+  u32 buffer[AES_MAX_KEYLENGTH_U32*2+1+2]; //dec key,enc key,length,alignment spare
+//  u32 key_enc[AES_MAX_KEYLENGTH_U32];
+//  u32 key_dec[AES_MAX_KEYLENGTH_U32];
+//  u32 key_length;
 };
 
 static inline u8 byte(const u32 x, const unsigned n)
@@ -268,96 +337,102 @@ u32 *mi_aes_encdec;
 #define loop4(i)  do {          \
   t = ror32(t, 8);              \
   t = ls_box(t) ^ rco_tab[i];   \
-  t ^= ctx->key_enc[4 * i];     \
-  ctx->key_enc[4 * i + 4] = t;  \
-  t ^= ctx->key_enc[4 * i + 1]; \
-  ctx->key_enc[4 * i + 5] = t;  \
-  t ^= ctx->key_enc[4 * i + 2]; \
-  ctx->key_enc[4 * i + 6] = t;  \
-  t ^= ctx->key_enc[4 * i + 3]; \
-  ctx->key_enc[4 * i + 7] = t;  \
+  t ^= key_enc[4 * i];     \
+  key_enc[4 * i + 4] = t;  \
+  t ^= key_enc[4 * i + 1]; \
+  key_enc[4 * i + 5] = t;  \
+  t ^= key_enc[4 * i + 2]; \
+  key_enc[4 * i + 6] = t;  \
+  t ^= key_enc[4 * i + 3]; \
+  key_enc[4 * i + 7] = t;  \
 } while (0)
 
 #define loop6(i)  do {          \
   t = ror32(t, 8);              \
   t = ls_box(t) ^ rco_tab[i];   \
-  t ^= ctx->key_enc[6 * i];     \
-  ctx->key_enc[6 * i + 6] = t;  \
-  t ^= ctx->key_enc[6 * i + 1]; \
-  ctx->key_enc[6 * i + 7] = t;  \
-  t ^= ctx->key_enc[6 * i + 2]; \
-  ctx->key_enc[6 * i + 8] = t;  \
-  t ^= ctx->key_enc[6 * i + 3]; \
-  ctx->key_enc[6 * i + 9] = t;  \
-  t ^= ctx->key_enc[6 * i + 4]; \
-  ctx->key_enc[6 * i + 10] = t; \
-  t ^= ctx->key_enc[6 * i + 5]; \
-  ctx->key_enc[6 * i + 11] = t; \
+  t ^= key_enc[6 * i];     \
+  key_enc[6 * i + 6] = t;  \
+  t ^= key_enc[6 * i + 1]; \
+  key_enc[6 * i + 7] = t;  \
+  t ^= key_enc[6 * i + 2]; \
+  key_enc[6 * i + 8] = t;  \
+  t ^= key_enc[6 * i + 3]; \
+  key_enc[6 * i + 9] = t;  \
+  t ^= key_enc[6 * i + 4]; \
+  key_enc[6 * i + 10] = t; \
+  t ^= key_enc[6 * i + 5]; \
+  key_enc[6 * i + 11] = t; \
 } while (0)
 
 #define loop8tophalf(i)  do {   \
   t = ror32(t, 8);              \
   t = ls_box(t) ^ rco_tab[i];   \
-  t ^= ctx->key_enc[8 * i];     \
-  ctx->key_enc[8 * i + 8] = t;  \
-  t ^= ctx->key_enc[8 * i + 1]; \
-  ctx->key_enc[8 * i + 9] = t;  \
-  t ^= ctx->key_enc[8 * i + 2]; \
-  ctx->key_enc[8 * i + 10] = t; \
-  t ^= ctx->key_enc[8 * i + 3]; \
-  ctx->key_enc[8 * i + 11] = t; \
+  t ^= key_enc[8 * i];     \
+  key_enc[8 * i + 8] = t;  \
+  t ^= key_enc[8 * i + 1]; \
+  key_enc[8 * i + 9] = t;  \
+  t ^= key_enc[8 * i + 2]; \
+  key_enc[8 * i + 10] = t; \
+  t ^= key_enc[8 * i + 3]; \
+  key_enc[8 * i + 11] = t; \
 } while (0)
 
 #define loop8(i)  do {          \
   loop8tophalf(i);              \
-  t  = ctx->key_enc[8 * i + 4]  \
+  t  = key_enc[8 * i + 4]  \
      ^ ls_box(t);               \
-  ctx->key_enc[8 * i + 12] = t; \
-  t ^= ctx->key_enc[8 * i + 5]; \
-  ctx->key_enc[8 * i + 13] = t; \
-  t ^= ctx->key_enc[8 * i + 6]; \
-  ctx->key_enc[8 * i + 14] = t; \
-  t ^= ctx->key_enc[8 * i + 7]; \
-  ctx->key_enc[8 * i + 15] = t; \
+  key_enc[8 * i + 12] = t; \
+  t ^= key_enc[8 * i + 5]; \
+  key_enc[8 * i + 13] = t; \
+  t ^= key_enc[8 * i + 6]; \
+  key_enc[8 * i + 14] = t; \
+  t ^= key_enc[8 * i + 7]; \
+  key_enc[8 * i + 15] = t; \
 } while (0)
 
 int mi_aes_expand_key(struct mi_aes_ctx *ctx, const u8 *in_key,
     unsigned int key_len)
 {
   const __le32 *key = (const __le32 *)in_key;
+  u32 *key_enc, *key_dec, *key_length;
   u32 i, t, u, v, w, j;
+
+//  key_enc   =&ctx->buffer[0];
+  key_enc   =PTR_ALIGN(ctx,8);
+  key_dec   =key_enc+AES_MAX_KEYLENGTH_U32;
+  key_length=key_dec+AES_MAX_KEYLENGTH_U32;
 
   if (key_len != AES_KEYSIZE_128 && key_len != AES_KEYSIZE_192 &&
       key_len != AES_KEYSIZE_256)
     return -EINVAL;
 
-  ctx->key_length = key_len;
+  *key_length = key_len;
 
-  ctx->key_dec[key_len + 24] = ctx->key_enc[0] = le32_to_cpu(key[0]);
-  ctx->key_dec[key_len + 25] = ctx->key_enc[1] = le32_to_cpu(key[1]);
-  ctx->key_dec[key_len + 26] = ctx->key_enc[2] = le32_to_cpu(key[2]);
-  ctx->key_dec[key_len + 27] = ctx->key_enc[3] = le32_to_cpu(key[3]);
+  key_dec[key_len + 24] = key_enc[0] = le32_to_cpu(key[0]);
+  key_dec[key_len + 25] = key_enc[1] = le32_to_cpu(key[1]);
+  key_dec[key_len + 26] = key_enc[2] = le32_to_cpu(key[2]);
+  key_dec[key_len + 27] = key_enc[3] = le32_to_cpu(key[3]);
   
   switch (key_len) {
   case AES_KEYSIZE_128:
-    t = ctx->key_enc[3];
+    t = key_enc[3];
     for (i = 0; i < 10; ++i)
       loop4(i);
     break;
 
   case AES_KEYSIZE_192:
-    ctx->key_enc[4] = le32_to_cpu(key[4]);
-    t = ctx->key_enc[5] = le32_to_cpu(key[5]);
+    key_enc[4] = le32_to_cpu(key[4]);
+    t = key_enc[5] = le32_to_cpu(key[5]);
 
     for (i = 0; i < 8; ++i)
       loop6(i);
     break;
 
   case AES_KEYSIZE_256:
-    ctx->key_enc[4] = le32_to_cpu(key[4]);
-    ctx->key_enc[5] = le32_to_cpu(key[5]);
-    ctx->key_enc[6] = le32_to_cpu(key[6]);
-    t = ctx->key_enc[7] = le32_to_cpu(key[7]);
+    key_enc[4] = le32_to_cpu(key[4]);
+    key_enc[5] = le32_to_cpu(key[5]);
+    key_enc[6] = le32_to_cpu(key[6]);
+    t = key_enc[7] = le32_to_cpu(key[7]);
 
     for (i = 0; i < 6; ++i)
       loop8(i);
@@ -365,15 +440,21 @@ int mi_aes_expand_key(struct mi_aes_ctx *ctx, const u8 *in_key,
     break;
   }
 
-  ctx->key_dec[0] = ctx->key_enc[key_len + 24];
-  ctx->key_dec[1] = ctx->key_enc[key_len + 25];
-  ctx->key_dec[2] = ctx->key_enc[key_len + 26];
-  ctx->key_dec[3] = ctx->key_enc[key_len + 27];
+  key_dec[0] = key_enc[key_len + 24];
+  key_dec[1] = key_enc[key_len + 25];
+  key_dec[2] = key_enc[key_len + 26];
+  key_dec[3] = key_enc[key_len + 27];
 
   for (i = 4; i < key_len + 24; ++i) {
     j = key_len + 24 - (i & ~3) + (i & 3);
-    imix_col(ctx->key_dec[j], ctx->key_enc[i]);
+    imix_col(key_dec[j], key_enc[i]);
   }
+
+  for (i=0;i<(key_len+28);i++) {
+    key_enc[i] = le32_to_cpu(key_enc[i]);
+    key_dec[i] = le32_to_cpu(key_dec[i]);
+  }
+
   return 0;
 }
 
@@ -386,13 +467,8 @@ int mi_aes_set_key(struct crypto_tfm *tfm, const u8 *in_key,
   int i;
 
   ret = mi_aes_expand_key(ctx, in_key, key_len);
-  if (!ret) {
-    for (i=0;i<(key_len+28);i++) {
-      ctx->key_enc[i] = le32_to_cpu(ctx->key_enc[i]);
-      ctx->key_dec[i] = le32_to_cpu(ctx->key_dec[i]);
-    }
+  if (!ret) 
     return 0;
-  }
 
   *flags |= CRYPTO_TFM_RES_BAD_KEY_LEN;
   return -EINVAL;
@@ -402,13 +478,17 @@ static int mi_cbc_encrypt_segment(struct crypto_tfm *tfm,
                          u8 *out, u8 *in, unsigned int nbytes, u8 *iv)
 
 {
-  struct mi_aes_ctx *ctx = (struct mi_aes_ctx *)tfm->__crt_ctx;
+  struct mi_aes_ctx *ctx = (struct mi_aes_ctx *)PTR_ALIGN(crypto_tfm_ctx(tfm),8);
   u32 *encdec = mi_aes_encdec;
 
-  if (((u32)in & 0x7) > 0 )
-    printk(KERN_WARNING "cbc_encrypt_segment unaligned in %x\n",in);
-  if (((u32)out & 0x7) > 0 )
-    printk(KERN_WARNING "cbc_encrypt_segment unaligned out: %x\n",out);
+#ifdef DEBUG
+  int i;  
+  i=(u32)in & 0xf;
+  mi_aes_alignment_encrypt[i]++;
+
+  i=(u32)out & 0xf;
+  mi_aes_alignment_encrypt[i]++;
+#endif
 
   __asm__ (
     ".set noat;"
@@ -427,7 +507,7 @@ static int mi_cbc_encrypt_segment(struct crypto_tfm *tfm,
     "lw    $s0,%2;"
     "lw    $s1,%4($s0);"
     "sll   $s1,$s1,2;"
-    "addiu $s1,$s1,96;"
+    "addiu $s1,$s1,80;"
     "addu  $s1,$s1,$s0;"
 
 // s2,s3,at init
@@ -460,7 +540,14 @@ static int mi_cbc_encrypt_segment(struct crypto_tfm *tfm,
 // ENCKEY start
     "lw    $s0,%2;"
 
-    "ld    $t0,0($s2);          ld    $t2,8($s2);"
+// data is allowed to be unaligned (avoid copy operation in crypto framework)
+
+//    "ld    $t0,0($s2);          ld    $t2,8($s2);"
+
+    "lwl   $t0,0($s2);          lwl   $t1,4($s2);"
+    "lwl   $t2,8($s2);          lwl   $t3,12($s2);"
+    "lwr   $t0,3($s2);          lwr   $t1,7($s2);"
+    "lwr   $t2,11($s2);         lwr   $t3,15($s2);"
 
 // insert CBC xor 
     "xor   $t0,$t0,$s4;"
@@ -472,34 +559,34 @@ static int mi_cbc_encrypt_segment(struct crypto_tfm *tfm,
     "xor   $t0,$t0,$t4;         xor   $t1,$t1,$t5;"
     "xor   $t2,$t2,$t6;         xor   $t3,$t3,$t7;"
 
-    "j cbc_enc_loop2;"
-
     "cbc_enc_loop:;"
 
     "ins   $a0,$t0,2,8;         ins   $a1,$t1,2,8;"
     "ins   $a2,$t2,2,8;         ins   $a3,$t3,2,8;"
-    "lw    $t5,3072($a0);       lw    $t6,3072($a1);"
     "srl   $t0,$t0,8;           srl   $t1,$t1,8;"
-    "lw    $t7,3072($a2);       lw    $t4,3072($a3);"
     "srl   $t2,$t2,8;           srl   $t3,$t3,8;"
+    "lw    $t5,3072($a0);       lw    $t6,3072($a1);"
+    "lw    $t7,3072($a2);       lw    $t4,3072($a3);"
 
     "ins   $a2,$t2,2,8;         ins   $a3,$t3,2,8;"
     "ins   $a0,$t0,2,8;         ins   $a1,$t1,2,8;"
-    "lw    $v0,2048($a2);       lw    $v1,2048($a3);"
     "srl   $t1,$t1,8;           srl   $t2,$t2,8;"
-    "lw    $t8,2048($a0);       lw    $t9,2048($a1);"
     "srl   $t3,$t3,8;           srl   $t0,$t0,8;"
+    "lw    $v0,2048($a2);       lw    $v1,2048($a3);"
+    "lw    $t8,2048($a0);       lw    $t9,2048($a1);"
     "xor   $t4,$t4,$v0;         xor   $t5,$t5,$v1;"
     "xor   $t6,$t6,$t8;         xor   $t7,$t7,$t9;"
 
     "ins   $a1,$t1,2,8;         ins   $a2,$t2,2,8;"
     "ins   $a3,$t3,2,8;         ins   $a0,$t0,2,8;"
-    "lw    $t9,1024($a1);       lw    $v0,1024($a2);"
     "srl   $t0,$t0,8;           srl   $t1,$t1,8;"
-    "lw    $v1,1024($a3);       lw    $t8,1024($a0);"
     "srl   $t2,$t2,8;           srl   $t3,$t3,8;"
+    "lw    $t9,1024($a1);       lw    $v0,1024($a2);"
+    "lw    $v1,1024($a3);       lw    $t8,1024($a0);"
     "xor   $t4,$t4,$t9;         xor   $t5,$t5,$v0;"
     "xor   $t6,$t6,$v1;         xor   $t7,$t7,$t8;"
+
+    "addiu $s0,$s0,16;"
 
     "ins   $a3,$t3,2,8;         ins   $a0,$t0,2,8;"
     "ins   $a1,$t1,2,8;         ins   $a2,$t2,2,8;"
@@ -513,50 +600,7 @@ static int mi_cbc_encrypt_segment(struct crypto_tfm *tfm,
     "xor   $t0,$t0,$t4;         xor   $t1,$t1,$t5;"
     "xor   $t2,$t2,$t6;         xor   $t3,$t3,$t7;"
 
-    "cbc_enc_loop2:;"
-
-    "addiu $s0,$s0,32;"
-
-    "ins   $a0,$t0,2,8;         ins   $a1,$t1,2,8;"
-    "ins   $a2,$t2,2,8;         ins   $a3,$t3,2,8;"
-    "srl   $t0,$t0,8;           srl   $t1,$t1,8;"
-    "srl   $t2,$t2,8;           srl   $t3,$t3,8;"
-    "lw    $t5,3072($a0);       lw    $t6,3072($a1);"
-    "lw    $t7,3072($a2);       lw    $t4,3072($a3);"
-
-    "ins   $a1,$t1,2,8;         ins   $a2,$t2,2,8;"
-    "ins   $a3,$t3,2,8;         ins   $a0,$t0,2,8;"
-    "srl   $t1,$t1,8;           srl   $t2,$t2,8;"
-    "srl   $t3,$t3,8;           srl   $t0,$t0,8;"
-    "lw    $v0,2048($a2);       lw    $v1,2048($a3);"
-    "lw    $t8,2048($a0);       lw    $t9,2048($a1);"
-    "xor   $t4,$t4,$v0;         xor   $t5,$t5,$v1;"
-    "xor   $t6,$t6,$t8;         xor   $t7,$t7,$t9;"
-
-    "ins   $a0,$t0,2,8;         ins   $a1,$t1,2,8;"
-    "ins   $a2,$t2,2,8;         ins   $a3,$t3,2,8;"
-    "srl   $t0,$t0,8;           srl   $t1,$t1,8;"
-    "srl   $t2,$t2,8;           srl   $t3,$t3,8;"
-    "lw    $t9,1024($a1);       lw    $v0,1024($a2);"
-    "lw    $v1,1024($a3);       lw    $t8,1024($a0);"
-    "xor   $t4,$t4,$t9;         xor   $t5,$t5,$v0;"
-    "xor   $t6,$t6,$v1;         xor   $t7,$t7,$t8;"
-
-    "ins   $a3,$t3,2,8;         ins   $a0,$t0,2,8;"
-    "ins   $a1,$t1,2,8;         ins   $a2,$t2,2,8;"
-    "lw    $v1,0($a3);          lw    $t8,0($a0);"
-    "lw    $t9,0($a1);          lw    $v0,0($a2);"
-    "xor   $t0,$t4,$t8;         xor   $t1,$t5,$t9;"
-    "xor   $t2,$t6,$v0;         xor   $t3,$t7,$v1;"
-
-    "ld    $t4,-16($s0);        ld    $t6,-8($s0);"
-
-    "xor   $t0,$t0,$t4;         xor   $t1,$t1,$t5;"
-    "xor   $t2,$t2,$t6;         xor   $t3,$t3,$t7;"
-
-    "bne   $s1,$s0,cbc_enc_loop;"
-
-    "cbc_enc_loop3:;"
+    "bne   $s1,$s0,cbc_enc_loop;" 
 
     "ins   $a0,$t0,2,8;         ins   $a1,$t1,2,8;"
     "ins   $a2,$t2,2,8;         ins   $a3,$t3,2,8;"
@@ -590,13 +634,18 @@ static int mi_cbc_encrypt_segment(struct crypto_tfm *tfm,
     "ins   $t4,$t8,24,8;        ins   $t5,$t9,24,8;"
     "ins   $t6,$v0,24,8;        ins   $t7,$v1,24,8;"
 
-    "ld    $t0,0($s0);          ld    $t2,8($s0);"
+    "ld    $t0,16($s0);         ld    $t2,24($s0);"
     "xor   $s4,$t0,$t4;         xor   $s5,$t1,$t5;"
     "xor   $s6,$t2,$t6;         xor   $s7,$t3,$t7;"
 
 //  AES ENcryption Loop end s4-s7 = result
 
-    "sd    $s4,0($s3);          sd    $s6,8($s3);"
+    "swl   $s4,0($s3);          swl   $s5,4($s3);"
+    "swl   $s6,8($s3);          swl   $s7,12($s3);"
+    "swr   $s4,3($s3);          swr   $s5,7($s3);"
+    "swr   $s6,11($s3);         swr   $s7,15($s3);"
+
+//    "sd    $s4,0($s3);          sd    $s6,8($s3);"
     "addiu $s2,$s2,16;"
     "addiu $s3,$s3,16;"
 
@@ -620,6 +669,10 @@ static int mi_cbc_encrypt_segment(struct crypto_tfm *tfm,
       "t0","t1","t2","t3","t4","t5","t6","t7","t8","t9",
       "v0","v1",
       "s0","s1","s2","s3","s4","s5","s6","s7" );
+
+#ifdef DEBUG
+  mi_aes_bytes_encrypted += (u64)nbytes; 
+#endif
 }
 
 static void mi_aes_encrypt(struct crypto_tfm *tfm, u8 *out, const u8 *in)
@@ -658,13 +711,17 @@ static int mi_cbc_decrypt_segment(struct crypto_tfm *tfm,
                          u8 *out, u8 *in, unsigned int nbytes, u8 *iv)
 
 {
-  struct mi_aes_ctx *ctx = (struct mi_aes_ctx *)tfm->__crt_ctx;
+  struct mi_aes_ctx *ctx = (struct mi_aes_ctx *)PTR_ALIGN(crypto_tfm_ctx(tfm),8);
   u32 *encdec = mi_aes_encdec;
 
-  if (((u32)in & 0x7) > 0 )
-    printk(KERN_WARNING "cbc_decrypt_segment unaligned in %x\n",in);
-  if (((u32)out & 0x7) > 0 )
-    printk(KERN_WARNING "cbc_decrypt_segment unaligned out: %x\n",out);
+#ifdef DEBUG
+  int i;
+  i=(u32)in & 0xf;
+  mi_aes_alignment_decrypt[i]++;
+
+  i=(u32)out & 0xf;
+  mi_aes_alignment_decrypt[i]++;
+#endif
 
   __asm__ (
     ".set noat;"
@@ -714,8 +771,14 @@ static int mi_cbc_decrypt_segment(struct crypto_tfm *tfm,
 // iv out = Last Block
 
     "lw    $t5,%5;"
-    "ld    $t0,0($s2);"
-    "ld    $t2,8($s2);"
+
+    "lwl   $t0,0($s2);          lwl   $t1,4($s2);"
+    "lwl   $t2,8($s2);          lwl   $t3,12($s2);"
+    "lwr   $t0,3($s2);          lwr   $t1,7($s2);"
+    "lwr   $t2,11($s2);         lwr   $t3,15($s2);"
+
+//    "ld    $t0,0($s2);"
+//    "ld    $t2,8($s2);"
     "ld    $s4,0($t5);"
     "ld    $s6,8($t5);"
     "sd    $t0,0($t5);"
@@ -823,19 +886,29 @@ static int mi_cbc_decrypt_segment(struct crypto_tfm *tfm,
 
     "addiu $s2,$s2,-16;"
 
-// get encrypted block into t0-t4 
+// get next encrypted block into t0-t4 
 // xor unencrypted block with it and store data
 
-    "ld    $t0,0($s2);"
-    "ld    $t2,8($s2);"
+    "lwl   $t0,0($s2);          lwl   $t1,4($s2);"
+    "lwl   $t2,8($s2);          lwl   $t3,12($s2);"
+    "lwr   $t0,3($s2);          lwr   $t1,7($s2);"
+    "lwr   $t2,11($s2);         lwr   $t3,15($s2);"
+
+//    "ld    $t0,0($s2);"
+//    "ld    $t2,8($s2);"
 
     "xor   $t4,$t0,$t4;"
     "xor   $t5,$t1,$t5;"
     "xor   $t6,$t2,$t6;"
     "xor   $t7,$t3,$t7;"
 
-    "sd    $t4,0($s3);"
-    "sd    $t6,8($s3);"
+    "swl   $t4,0($s3);          swl   $t5,4($s3);"
+    "swl   $t6,8($s3);          swl   $t7,12($s3);"
+    "swr   $t4,3($s3);          swr   $t5,7($s3);"
+    "swr   $t6,11($s3);         swr   $t7,15($s3);"
+
+//    "sd    $t4,0($s3);"
+//    "sd    $t6,8($s3);"
     "addiu $s3,$s3,-16;"
 
     "j cbc_main_loop;"
@@ -864,6 +937,11 @@ static int mi_cbc_decrypt_segment(struct crypto_tfm *tfm,
       "t0","t1","t2","t3","t4","t5","t6","t7","t8","t9",
       "v0","v1",
       "s0","s1","s2","s3","s4","s5","s6","s7" );
+
+#ifdef DEBUG
+  mi_aes_bytes_decrypted += (u64)nbytes;
+#endif
+
 }
 
 static void mi_aes_decrypt(struct crypto_tfm *tfm, u8 *out, const u8 *in)
@@ -906,7 +984,7 @@ static struct crypto_alg mi_aes_alg = {
   .cra_flags        = CRYPTO_ALG_TYPE_CIPHER,
   .cra_blocksize    = AES_BLOCK_SIZE,
   .cra_ctxsize      = sizeof(struct mi_aes_ctx),
-  .cra_alignmask    = 7,
+  .cra_alignmask    = 0,
   .cra_module       = THIS_MODULE,
   .cra_list         = LIST_HEAD_INIT(mi_aes_alg.cra_list),
   .cra_u            = {
@@ -927,7 +1005,7 @@ static struct crypto_alg mi_cbc_alg = {
   .cra_flags              = CRYPTO_ALG_TYPE_BLKCIPHER,
   .cra_blocksize          = AES_BLOCK_SIZE,
   .cra_ctxsize            = sizeof(struct mi_aes_ctx),
-  .cra_alignmask          = 7,
+  .cra_alignmask          = 0,
   .cra_type               = &crypto_blkcipher_type,
   .cra_module             = THIS_MODULE,
   .cra_list               = LIST_HEAD_INIT(mi_cbc_alg.cra_list),
@@ -1354,6 +1432,11 @@ void static mi_sha1_transform(__u32 *digest, const char *data)
       "t0","t1","t2","t3","t4","t5","t6","t7","t8","t9",
       "v0","v1",
       "s0","s1","s2","s3","s4","s5","s6","s7" );
+
+#ifdef DEBUG
+  mi_sha1_bytes_calculated += 64;
+#endif
+
 }
 
 static int mi_sha1_init(struct shash_desc *desc)
@@ -1813,6 +1896,11 @@ void static mi_md5_transform(u32 *hash, u32 const *in)
       "t0","t1","t2","t3","t4","t5","t6","t7","t8","t9",
       "v0","v1",
       "s0","s1","s2","s3","s4","s5","s6","s7" );
+
+#ifdef DEBUG
+  mi_md5_bytes_calculated += 64;
+#endif
+
 }
 
 static int mi_md5_init(struct shash_desc *desc)
@@ -1946,6 +2034,10 @@ static int __init mi_init(void)
     printk(KERN_ERR "mcespi only for big endian (at the moment)\n");
     return -EPERM; 
   }
+
+#ifdef DEBUG
+  mi_debug();
+#endif
 
   mi_aes_encdec=mi_aes_encdectab;
   mi_aes_encdec=PTR_ALIGN(mi_aes_encdec,1024);
