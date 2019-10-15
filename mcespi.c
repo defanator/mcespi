@@ -72,7 +72,6 @@
  *
  */
 
-/*
 #include <crypto/internal/hash.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
@@ -83,16 +82,7 @@
 #include <linux/crypto.h>
 #include <asm/byteorder.h>
 #include <linux/debugfs.h>
-#include <linux/unaligned/packed_struct.h> */
-
-#include <crypto/internal/hash.h>
-#include <crypto/md5.h>
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/string.h>
-#include <linux/types.h>
-#include <linux/cryptohash.h>
-#include <asm/byteorder.h>
+#include <linux/unaligned/packed_struct.h>
 
 #define NODEBUG
 
